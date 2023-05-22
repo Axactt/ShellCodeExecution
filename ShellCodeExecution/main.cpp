@@ -63,6 +63,7 @@ bool Injectdll(const TCHAR* szProcess, const TCHAR* szPath, LAUNCH_METHOD Method
 	//!Creating dll-path by virtual allocating memeory
 	//? len is calculated to take care whether in unicode or ansi style
 	auto len = _tcslen(szPath) * sizeof(TCHAR);
+
 	//!Allocate virtualmemory for size of dll path name
 	void* pArg = VirtualAllocEx(hProc, nullptr, len, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
 	if (!pArg)
@@ -97,7 +98,14 @@ bool Injectdll(const TCHAR* szProcess, const TCHAR* szPath, LAUNCH_METHOD Method
 	}
 	UINT_PTR hDllOut = 0;
 	DWORD last_error = 0;
-	DWORD dwError = StartRoutine(hProc, p_LoadLibrary, pArg, Method, last_error, hDllOut);
+
+	//! This instruction takes the Method(injection type) and uses it in StartRoutine Wrapper(switch-case) 
+	//! to create a shell-code specific to method-type(e.g. NtCreateThreadex or Hijack-Thread) for execution of pRoutine procedure(2nd parameter) with and argument (of pArg ) to do the execution
+	//! The output of executed pRoutine is accessed in non-const reference  which is  5th parameter hDllOut of type UINT_PTR&
+	//todo to practice more function implementation where output of function can be accessed using parameters passesd as non-cont pointers or non-const refernces 
+	//todo as these nonconst reff/pointer function parameters/arguments are value-initalized before function implementation, the function execution result can be accessed using these parameters
+
+	DWORD dwError = StartRoutine(hProc, p_LoadLibrary, pArg, Method, last_error, hDllOut); 
 
 	//todo to understand why deallocation can be done only in case when method is not LM_OueueUserApc
 	//? why deallocation at LM_QUEUEuserApc corrupts the stack and crashing of other threads
@@ -120,7 +128,7 @@ bool Injectdll(const TCHAR* szProcess, const TCHAR* szPath, LAUNCH_METHOD Method
 
 int main()
 {
-	bool bRet = Injectdll(PROCESS_NAME, DLL_PATH, LM_NtCreateThreadEx);
+	bool bRet = Injectdll(PROCESS_NAME, DLL_PATH, LM_HiJackThread);
 	//!To log various error function is returning bool true value on success and std::cin.get() is used to stop till keyboard input.
 	if (!bRet)
 	{

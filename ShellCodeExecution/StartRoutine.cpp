@@ -172,7 +172,7 @@ DWORD SR_NtCreateThreadEx(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, D
 	return SR_ERR_SUCCESS;
 }
 
-DWORD SR_HijackThread(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, DWORD& lastWin32Error, UINT_PTR& Out)
+DWORD SR_HijackThread(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, DWORD& lastWin32Error, UINT_PTR& RemoteRet)
 {
 	//! first all threads are being enumerated CreateToolHelp32snapshot()
 	THREADENTRY32 TE32{ 0 };
@@ -206,8 +206,8 @@ DWORD SR_HijackThread(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, DWORD
 			dwThreadId = TE32.th32ThreadID;
 			break;
 		}
-	//!if the thread owner processId does not match the targetProcess id we search next thread
-	
+		//!if the thread owner processId does not match the targetProcess id we search next thread
+
 		bRet = Thread32Next(hSnap, &TE32);
 
 	} while (bRet);
@@ -215,9 +215,9 @@ DWORD SR_HijackThread(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, DWORD
 	{
 		return SR_HT_ERR_NO_THREADS;
 	}
-	 //! open handle to the thread as per deesired security access righhts
+	//! open handle to the thread as per deesired security access righhts
 	HANDLE hThread = OpenThread(THREAD_SET_CONTEXT | THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, dwThreadId);
-	
+
 	if (!hThread) //Error checking if open thread fails
 	{
 		lastWin32Error = GetLastError();
@@ -258,64 +258,208 @@ DWORD SR_HijackThread(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, DWORD
 		return SR_HT_ERR_CANT_ALLOC_MEM;
 
 	}
-	return 0;
-}
-// sTEPS TO GENERATE THE SHELLCODE FOR	execution of change of context of suspendedd thread to our code
+
+	// sTEPS TO GENERATE THE SHELLCODE FOR	execution of change of context of suspendedd thread to our code
 
 #ifdef _WIN64
 
-BYTE ShellCode[] = 
-{
-0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,   //!adrs- 0x08 -> returned value from shell execution
+	BYTE ShellCode[] =
+	{
+	0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,   //!adrs- 0x08 -> returned value from shell execution
 
-0x48,0x83,0xec,0x08,   //!adrs +0x00   -> sub rsp,0x08 ; fixed_stack_allocation to push RipValue after shell code execution
+	0x48,0x83,0xec,0x08,   //!adrs +0x00   -> sub rsp,0x08 ; fixed_stack_allocation to push RipValue after shell code execution
 
-0xc7,0x04, 0x24,0x00,0x00,0x00,0x00, //! adrs +0x04(start+0x07) -> mov [rsp],RipLowPart; 
-0xc7,0x44, 0x24,0x04,0x00,0x00,0x00,0x00, //! adrs+ 0x0b(+0x0f) -> mov [rsp+0x04],RipHighPart
+	0xc7,0x04, 0x24,0x00,0x00,0x00,0x00, //! adrs +0x04 (start+0x07) -> mov [rsp],RipLowPart; 
+	0xc7,0x44, 0x24,0x04,0x00,0x00,0x00,0x00, //! adrs+ 0x0b (+0x0f) -> mov [rsp+0x04],RipHighPart
 
-0x50,0x51,0x52,0x41,0x50,0x41,0x51,0x41,0x52,0x41,0x53,//! adrs+0x13 -> push r(a/c/d/)x / r(8-11):: save all volatile registers on the stack
+	0x50,0x51,0x52,0x41,0x50,0x41,0x51,0x41,0x52,0x41,0x53,//! adrs+0x13 -> push r(a/c/d/)x / r(8-11):: save all volatile registers on the stack
 
-0x9C, //! adrs + 0x1E	 -> pushfq :: save the rflags register on stack
+	0x9C, //! adrs + 0x1E	 -> pushfq :: save the rflags register on stack
 
-0x48,0xB8,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,//! adrs + 0x1F (+ 0x21)	-> mov rax, pRoutine:: will save the address of the routine to be executed in RAX register
+	0x48,0xB8,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,//! adrs + 0x1F  (+ 0x21)	-> mov rax, pRoutine:: will save the address of the routine to be executed in RAX register
 
-0x48,0xB9,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,//! adrs+ 0x29 (+ 0x2B)-> mov rcx, pArg:: This will save the address of the argument(first parameter) to pRoutine in RCX register for call
+	0x48,0xB9,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,//! adrs+ 0x29  (+ 0x2B)-> mov rcx, pArg:: This will save the address of the argument(first parameter) to pRoutine in RCX register for call
 
-0x48,0x83,0xEC,0x20,//!adrs + 0x33 -> sub rsp, 0x20:: again  stach_fixed_allocation_size generated for home/shadow space as per MS x64 ABI
-0xFF,0xD0, //! adrs + 0x37	-> call rax:: pRoutine address saved in rax(at adrs+0x1f) called 
+	0x48,0x83,0xEC,0x20,//!adrs + 0x33 -> sub rsp, 0x20:: again  stach_fixed_allocation_size generated for home/shadow space as per MS x64 ABI
 
-//?Sort of epilog for the routine called up by rax i.e pRoutine
+	0xFF,0xD0, //! adrs + 0x37	-> call rax:: pRoutine address saved in rax(at adrs+0x1f) called 
 
-0x48, 0x83, 0xC4, 0x20,	//! addrs + 0x39 -> add rsp, 0x20:: function epilogue: deallocation of the fixed part of stack
-0x48, 0x8D, 0x0D, 0xB4, 0xFF, 0xFF, 0xFF,//! addrs+ 0x3D	-> lea rcx, [pCodecave] :: This instruction saves the start of shellcode adrs into rcx . So RCX now contains shellcode begin adrs
-0x48, 0x89, 0x01, //! adrs + 0x44	-> mov [rcx], rax :: Save the return value of pRoutine executed in the address pointed to be RCX. Which is start address of ShellCode
-0x9D, //! adrs + 0x47	 -> popfq :: Unwinding of data for function epilogue return.Pops off the Rflags from stack and restores rFlags register
-0x41, 0x5B, 0x41, 0x5A, 0x41, 0x59, 0x41, 0x58, 0x5A, 0x59, 0x58,//!adrs + 0x48-> pop r(11-8) / r(d/c/a)x :: Restore value of volatile registers pushed onto stack and increment stack pointer
+	//?Sort of epilog for the routine called up by rax i.e pRoutine
 
-0xC6, 0x05, 0xA9, 0xFF, 0xFF, 0xFF, 0x00,//! addrs + 0x53	-> mov byte ptr[$ - 0x57], 0
+	0x48, 0x83, 0xC4, 0x20,	//! addrs + 0x39 -> add rsp, 0x20:: function epilogue: deallocation of the fixed part of stack
 
-0xC3 //! addrss + 0x5A	 -> ret :: pops of the value of address saved onto the stack into RIP and and Increment the Stack poinet by 64bit or 8 bytes
-}; // SIZE = addrss+0x5B (start_shellCode+ 0x08)
 
-DWORD FuncOffset = 0x08; 
+	0x48, 0x8D, 0x0D, 0xB4, 0xFF, 0xFF, 0xFF,//! addrs+ 0x3D	-> lea rcx, [pCodecave] :: This instruction saves the start of shellcode adrs into rcx . So RCX now contains shellcode begin adrs
 
+	//todo after following  instruction executed in shellcode; ReadProcessMemory can be used on ShellCode-start address to get pRoutine function Result Value
+	0x48, 0x89, 0x01, //! adrs + 0x44	-> mov [rcx], rax :: Save the return value of pRoutine executed in the address pointed to be RCX. Which is start address of ShellCode
+
+
+	0x9D, //! adrs + 0x47	 -> popfq :: Unwinding of data for function epilogue return.Pops off the Rflags from stack and restores rFlags register
+
+
+	0x41, 0x5B, 0x41, 0x5A, 0x41, 0x59, 0x41, 0x58, 0x5A, 0x59, 0x58,//!adrs + 0x48-> pop r(11-8) / r(d/c/a)x :: Restore value of volatile registers pushed onto stack and increment stack pointer
+
+	0xC6, 0x05, 0xA9, 0xFF, 0xFF, 0xFF, 0x00,//??  addrs + 0x53	-> mov byte ptr[$ - 0x57], 0 Sort of Check-Byte Routine in shellcode to confirm later That Shellcode execution has finished
+
+	0xC3 //! addrss + 0x5A	 -> ret :: pops of the value of address saved onto the stack into RIP and and Increment the Stack poinet by 64bit or 8 bytes
+	}; // SIZE = addrss+0x5B (start_shellCode+ 0x08)
+
+	//? Initially we have kept all memory references of loaction addresses inside Shellcode to be 0x00
+	//? The following code writes up the loaction with desired value like OLDRIP, pRoutine, pARG etc
+
+
+	DWORD FuncOffset = 0x08;  //! Shellcode_start_addrs + 0x08
+	DWORD CheckByteOffset = 0x03 + FuncOffset;
+
+	DWORD dwLoRIP = (DWORD)(OldContext.Rip & 0xffffffff);//! Getting Low 32 bit part of Old Rip from Old thread Context
+	DWORD dwHiRIP = (DWORD)(((OldContext.Rip) >> 0x20) & 0xffffffff);//! Getting High 32 bits part of Old Rip from Old thread Context
+
+	//! writing value of old Rip at the earlier designated position in ShellCode.
+	//! So RIP can be used while returning back in shellcode using RET isnatruction
+	*reinterpret_cast<DWORD*>(ShellCode + FuncOffset + 0x07) = dwLoRIP;
+	*reinterpret_cast<DWORD*>(ShellCode + FuncOffset + 0x0f) = dwHiRIP;
+
+	//!writing value of PRoutine(desired func for execution) and pArg(parameter desired func)\
+
+	*reinterpret_cast<void**>(ShellCode + FuncOffset + 0x21) = pRoutine;
+	*reinterpret_cast<void**>(ShellCode + FuncOffset + 0x2b) = pArg;
+
+//!Update instruction pointer into Oldcontext to start executing at addrs OR shellcode+0x08
+	
+OldContext.Rip = reinterpret_cast<UINT_PTR>(pCodeCave) + FuncOffset;
 
 
 #else
 
+	//! shelllCode for x86 or 32 bit execution
+	BYTE ShellCode[] =
+	{
+		0x00, 0x00, 0x00, 0x00,					// - 0x04 (pCodecave)	-> returned value	;buffer to store returned value (eax)
+
+		0x83, 0xEC, 0x04,							// + 0x00				-> sub esp, 0x04							;prepare stack for ret
+		0xC7, 0x04, 0x24, 0x00, 0x00, 0x00, 0x00,	// + 0x03 (+ 0x06)		-> mov [esp], OldEip						;store old eip as return address
+
+		0x50, 0x51, 0x52,							// + 0x0A				-> psuh e(a/c/d)							;save e(a/c/d)x
+		0x9C,										// + 0x0D				-> pushfd									;save flags register
+
+		0xB9, 0x00, 0x00, 0x00, 0x00,				// + 0x0E (+ 0x0F)		-> mov ecx, pArg							;load pArg into ecx
+		0xB8, 0x00, 0x00, 0x00, 0x00,				// + 0x13 (+ 0x14)		-> mov eax, pRoutine
+
+		0x51,										// + 0x18				-> push ecx									;push pArg
+		0xFF, 0xD0,									// + 0x19				-> call eax									;call target function
+
+		0xA3, 0x00, 0x00, 0x00, 0x00,				// + 0x1B (+ 0x1C)		-> mov dword ptr[pCodecave], eax			;store returned value
+
+		0x9D,										// + 0x20				-> popfd									;restore flags register
+		0x5A, 0x59, 0x58,							// + 0x21				-> pop e(d/c/a)								;restore e(d/c/a)x
+
+		0xC6, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00,	// + 0x24 (+ 0x26) -> mov byte ptr[pCodecave + 0x06], 0x00		                                            ;set checkbyte to 0
+
+		0xC3										// + 0x2B				-> ret										;return to OldEip
+	}; // SIZE = 0x2C (+ 0x04)
+
+	//? Writing values of oldrip, proutine, parg, pCodeCave external variables in shellcode same as done for x64 portion
+	DWORD FuncOffset = 0x04; //! This is reference or Datum from Shellcode start for all addreess calculations
+	DWORD CheckbyteOffset = 0x02 + FuncOffset; 
+
+	*reinterpret_cast<DWORD*>(ShellCode + FuncOffset + 0x06) = OldContext.Eip;
+
+	*reinterpret_cast<void**>(ShellCode + FuncOffset + 0x0f) = pArg;
+	*reinterpret_cast<void**>(ShellCode + FuncOffset + 0x14) = pRoutine;
+
+	*reinterpret_cast<void**>(ShellCode + FuncOffset + 0x1c) = pCodeCave;
+	*reinterpret_cast<BYTE**>(ShellCode + FuncOffset + 0x26) = reinterpret_cast<BYTE*>(pCodeCave) + CheckbyteOffset;
+
+	OldContext.Eip = reinterpret_cast<DWORD>(pCodeCave) + FuncOffset;
+
 #endif
+	//! Will write shellcode to the codeCave using WPM
+	if (!WriteProcessMemory(hTargetProc, pCodeCave, ShellCode, sizeof(ShellCode), nullptr))
+	{
+		lastWin32Error = GetLastError();
 
+		ResumeThread(hThread);
+		CloseHandle(hThread);
+		VirtualFreeEx(hTargetProc, pCodeCave, 0, MEM_RELEASE);
+		return SR_HT_ERR_SET_CONTEXT_FAIL;
+	}
 
+	//! Newly open handle hThread used to setContecxt to New updtaed ontext after shell code execution. Named a s OldContext but is actually new because Intruction pointer have already been updated by now
+	
+	if (!SetThreadContext(hThread, &OldContext))
+	{
+		lastWin32Error = GetLastError();
 
+		ResumeThread(hThread);
+		CloseHandle(hThread);
+		VirtualFreeEx(hTargetProc, pCodeCave, 0, MEM_RELEASE);
 
+		return SR_HT_ERR_SET_CONTEXT_FAIL;
 
+	}
+	 //! Check if ResumeThread fails and gives error value
+	if (ResumeThread(hThread) == (DWORD)-1)
+	{
+		lastWin32Error = GetLastError();
 
+		CloseHandle(hThread);
+		VirtualFreeEx(hTargetProc, pCodeCave, 0, MEM_RELEASE);
+		return SR_HT_ERR_RESUME_FAIL;
 
+	}
+
+	CloseHandle(hThread);
+	 //todo following is a check for successful shellcode execution , To be chaneged to better check
+	DWORD Timer = GetTickCount(); //! Setting a value of timer in code at this point of execution
+	BYTE CheckByte = 1;
+	
+	//! here we are setting a value of CheckByte different from Zero;
+	//! zero value will be set on Successful execution of shellcode completion
+	do
+	{
+		ReadProcessMemory(hTargetProc, reinterpret_cast<BYTE*>(pCodeCave) + CheckByteOffset, &CheckByte, 1, nullptr);
+
+		if (GetTickCount() - Timer > SR_REMOTE_TIMEOUT)
+		{
+			return SR_HT_ERR_TIMEOUT;
+
+		}
+		Sleep(10);
+	} while (CheckByte != 0);
+
+	// Read out the bytes from pCodeCave to RemoeRet buffer address 
+	ReadProcessMemory(hTargetProc, pCodeCave, &RemoteRet, sizeof(RemoteRet), nullptr);
+
+	VirtualFreeEx(hTargetProc, pCodeCave, 0, MEM_RELEASE);
+
+	return SR_ERR_SUCCESS;
+
+}
 
 
 
 DWORD SR_SetWindowsHookEx(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, DWORD& lastWin32Error, UINT_PTR& Out)
 {
+	void* pCodeCave = VirtualAllocEx(hTargetProc, nullptr, 0x100, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+
+	if (!pCodeCave)
+	{
+		lastWin32Error = GetLastError();
+		return SR_SWHEX_ERR_CANT_ALLOC_MEM;
+	}
+
+	void* pCallNextHookEx = GetProcAddressEx(hTargetProc, TEXT("user32.dll"), "CallNextHookEx");
+	if (!pCallNextHookEx)
+	{
+		lastWin32Error = GetLastError();
+		return SR_SWHEX_ERR_CNHEX_MISSING;
+
+	}
+
+
+
+
 	return 0;
 }
 

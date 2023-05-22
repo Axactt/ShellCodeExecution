@@ -98,8 +98,10 @@ void* GetProcAddressEx(HANDLE hTargetProc, const TCHAR* lpModuleName, const char
 		memcpy(pFullExportName, reinterpret_cast<char*>(localBase + FuncRVA), nameLength);
 		//strchr Returns pointer to first occurrence of character '.'
 		char* pFuncName = strchr(pFullExportName, '.');
-		*(pFuncName++) = 0;
-		if (*pFuncName == '#')
+		//? supposedly a null terminator introduced in the pFuncName char* string pointer position at the place of '.' in original pFullExportName string
+		//? This null terminator will aid in reading the name of module dll by GetProcAddressEx funcion
+		*(pFuncName++) = 0; //! writes 0 at the address of pFuncName pointer which is position of '.' and then POST increments it by 1 to next contiguous char byte
+		if (*pFuncName == '#') //! If the next position after '.(dot)' is # then export by ordinals is taking place 
 			pFuncName = reinterpret_cast<char*>(LOWORD(atoi(++pFuncName)));
 #ifdef UNICODE
 		TCHAR  ModNameW[MAX_PATH + 1]{ 0 };
