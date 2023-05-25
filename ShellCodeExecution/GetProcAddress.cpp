@@ -27,7 +27,10 @@ HINSTANCE GetModuleHandleEx(HANDLE hTargetProc, const TCHAR* lpModuleName)
 			break;
 		bRet = Module32Next(hSnap, &me32);
 	} while (bRet);
+
+	if(hSnap)
 	CloseHandle(hSnap);
+
 	if (!bRet)
 	{
 

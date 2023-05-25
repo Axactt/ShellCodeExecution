@@ -6,8 +6,8 @@
 //? use of conditional macros to define different versions on basis of build configurations x86 or x64
 //? _WIN64 IS USED TO DEFINE and choose THE build version of x64 build
 
-#define PROCESS_NAME_X86 TEXT("Test Console - X86.exe")
-#define PROCESS_NAME_X64 TEXT("learngamehacking1.exe")
+#define PROCESS_NAME_X86 TEXT("left4dead2.exe")
+#define PROCESS_NAME_X64 TEXT("win32calc.exe")
 
 #define LOAD_LIBRARY_NAME_A  "LoadLibraryA"
 #define LOAD_LIBRARY_NAME_W  "LoadLibraryW"
@@ -128,7 +128,7 @@ bool Injectdll(const TCHAR* szProcess, const TCHAR* szPath, LAUNCH_METHOD Method
 
 int main()
 {
-	bool bRet = Injectdll(PROCESS_NAME, DLL_PATH, LM_HiJackThread);
+	bool bRet = Injectdll(PROCESS_NAME, DLL_PATH, LM_SetWindowsHookEx);
 	//!To log various error function is returning bool true value on success and std::cin.get() is used to stop till keyboard input.
 	if (!bRet)
 	{

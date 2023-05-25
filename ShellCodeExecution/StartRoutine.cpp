@@ -288,8 +288,9 @@ DWORD SR_HijackThread(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, DWORD
 
 	0x48, 0x83, 0xC4, 0x20,	//! addrs + 0x39 -> add rsp, 0x20:: function epilogue: deallocation of the fixed part of stack
 
-
-	0x48, 0x8D, 0x0D, 0xB4, 0xFF, 0xFF, 0xFF,//! addrs+ 0x3D	-> lea rcx, [pCodecave] :: This instruction saves the start of shellcode adrs into rcx . So RCX now contains shellcode begin adrs
+	//?:: This instruction saves the start of shellcode adrs into rcx . So RCX now contains shellcode begin adrress 
+	//? .PIC with RIP relative addressing used  to load the shellcode beginning address in rcx using LEA
+	0x48, 0x8D, 0x0D, 0xB4, 0xFF, 0xFF, 0xFF,//! addrs+ 0x3D	-> lea rcx, [pCodecave] 
 
 	//todo after following  instruction executed in shellcode; ReadProcessMemory can be used on ShellCode-start address to get pRoutine function Result Value
 	0x48, 0x89, 0x01, //! adrs + 0x44	-> mov [rcx], rax :: Save the return value of pRoutine executed in the address pointed to be RCX. Which is start address of ShellCode
@@ -361,7 +362,7 @@ OldContext.Rip = reinterpret_cast<UINT_PTR>(pCodeCave) + FuncOffset;
 
 	//? Writing values of oldrip, proutine, parg, pCodeCave external variables in shellcode same as done for x64 portion
 	DWORD FuncOffset = 0x04; //! This is reference or Datum from Shellcode start for all addreess calculations
-	DWORD CheckbyteOffset = 0x02 + FuncOffset; 
+	DWORD CheckByteOffset = 0x02 + FuncOffset; 
 
 	*reinterpret_cast<DWORD*>(ShellCode + FuncOffset + 0x06) = OldContext.Eip;
 
@@ -369,7 +370,7 @@ OldContext.Rip = reinterpret_cast<UINT_PTR>(pCodeCave) + FuncOffset;
 	*reinterpret_cast<void**>(ShellCode + FuncOffset + 0x14) = pRoutine;
 
 	*reinterpret_cast<void**>(ShellCode + FuncOffset + 0x1c) = pCodeCave;
-	*reinterpret_cast<BYTE**>(ShellCode + FuncOffset + 0x26) = reinterpret_cast<BYTE*>(pCodeCave) + CheckbyteOffset;
+	*reinterpret_cast<BYTE**>(ShellCode + FuncOffset + 0x26) = reinterpret_cast<BYTE*>(pCodeCave) + CheckByteOffset;
 
 	OldContext.Eip = reinterpret_cast<DWORD>(pCodeCave) + FuncOffset;
 
@@ -439,7 +440,7 @@ OldContext.Rip = reinterpret_cast<UINT_PTR>(pCodeCave) + FuncOffset;
 
 
 
-DWORD SR_SetWindowsHookEx(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, DWORD& lastWin32Error, UINT_PTR& Out)
+DWORD SR_SetWindowsHookEx(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, DWORD& lastWin32Error, UINT_PTR& RemoteRet)
 {
 	void* pCodeCave = VirtualAllocEx(hTargetProc, nullptr, 0x100, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
 
@@ -449,16 +450,194 @@ DWORD SR_SetWindowsHookEx(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, D
 		return SR_SWHEX_ERR_CANT_ALLOC_MEM;
 	}
 
+	//Entering a hoook in hook chain. 
+  // to make sure all hooks in chain get executed
 	void* pCallNextHookEx = GetProcAddressEx(hTargetProc, TEXT("user32.dll"), "CallNextHookEx");
 	if (!pCallNextHookEx)
 	{
+		VirtualFreeEx(hTargetProc, pCodeCave, 0, MEM_RELEASE);
+		
 		lastWin32Error = GetLastError();
+		
 		return SR_SWHEX_ERR_CNHEX_MISSING;
 
 	}
+#ifdef _WIN64
+	BYTE ShellCode[] =
+	{
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,	// - 0x18	-> pArg / returned value / rax	;buffer
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,	// - 0x10	-> pRoutine						;pointer to target function
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,	// - 0x08	-> CallNextHookEx				;pointer to CallNextHookEx
 
+		0x55,											// + 0x00	-> push rbp						;save important registers
+		0x54,											// + 0x01	-> push rsp
+		0x53,											// + 0x02	-> push rbx
 
+		0x48, 0x8D, 0x1D, 0xDE, 0xFF, 0xFF, 0xFF,	// + 0x03	-> lea rbx, [pArg]; load pointer into rbx (as Position-Independent-Code RIP relative addressing is used this will load address of rip+0xff ffffDE into RBX) which is start of shellcode
 
+		0x48, 0x83, 0xEC, 0x20,							// + 0x0A	-> sub rsp, 0x20				;reserve stack
+		0x4D, 0x8B, 0xC8,								// + 0x0E	-> mov r9,r8	;set up arguments for CallNextHookEx
+		0x4C, 0x8B, 0xC2,								// + 0x11	-> mov r8, rdx
+		0x48, 0x8B, 0xD1,								// + 0x14	-> mov rdx,rcx
+		0xFF, 0x53, 0x10,								// + 0x17	-> call [rbx + 0x10]			;call CallNextHookEx
+		0x48, 0x83, 0xC4, 0x20,							// + 0x1A	-> add rsp, 0x20				;update stack
+
+		0x48, 0x8B, 0xC8,								// + 0x1E	-> mov rcx, rax					;copy retval into rcx
+
+		0xEB, 0x00,										// + 0x21	-> jmp $ + 0x02					;jmp to next instruction
+		0xC6, 0x05, 0xF8, 0xFF, 0xFF, 0xFF, 0x18,		// + 0x23	-> mov byte ptr[$ - 0x01], 0x1A	;hotpatch jmp above to skip shellcode:: This to ensure shellcode only execute once
+
+		0x48, 0x87, 0x0B,								// + 0x2A	-> xchg [rbx], rcx				;store CallNextHookEx retval, load pArg
+		0x48, 0x83, 0xEC, 0x20,							// + 0x2D	-> sub rsp, 0x20				;reserve stack
+		0xFF, 0x53, 0x08,								// + 0x31	-> call [rbx + 0x08]			;call pRoutine
+		0x48, 0x83, 0xC4, 0x20,							// + 0x34	-> add rsp, 0x20				;update stack
+
+		0x48, 0x87, 0x03,								// + 0x38	-> xchg [rbx], rax				;store pRoutine retval, restore CallNextHookEx retval
+
+		0x5B,											// + 0x3B	-> pop rbx						;restore important registers
+		0x5C,											// + 0x3C	-> pop rsp
+		0x5D,											// + 0x3D	-> pop rbp
+
+		0xC3											// + 0x3E	-> ret							;return
+	}; // SIZE = 0x3F (+ 0x18)
+
+	DWORD CodeOffset = 0x18;
+	DWORD CheckByteOffset = 0x22 + CodeOffset;
+
+	*reinterpret_cast<void**>(ShellCode + 0x00) = pArg;
+	*reinterpret_cast<void**>(ShellCode + 0x08) = pRoutine;
+	*reinterpret_cast<void**>(ShellCode + 0x10) = pCallNextHookEx;
+
+#else
+	BYTE ShellCode[] =
+	{
+		0x00, 0x00, 0x00, 0x00,			// - 0x08				-> pArg						;pointer to argument
+		0x00, 0x00, 0x00, 0x00,			// - 0x04				-> pRoutine					;pointer to target function
+
+		0x55,							// + 0x00				-> push ebp					;x86 stack frame creation
+		0x8B, 0xEC,						// + 0x01				-> mov ebp, esp
+
+		0xFF, 0x75, 0x10,				// + 0x03				-> push [ebp + 0x10]		;push CallNextHookEx arguments
+		0xFF, 0x75, 0x0C,				// + 0x06				-> push [ebp + 0x0C] 
+		0xFF, 0x75, 0x08, 				// + 0x09				-> push [ebp + 0x08]
+		0x6A, 0x00,						// + 0x0C				-> push 0x00
+		0xE8, 0x00, 0x00, 0x00, 0x00,	// + 0x0E (+ 0x0F)		-> call CallNextHookEx		;call CallNextHookEx
+
+		0xEB, 0x00,						// + 0x13				-> jmp $ + 0x02				;jmp to next instruction
+
+		0x50,							// + 0x15				-> push eax					;save eax (CallNextHookEx retval)
+		0x53,							// + 0x16				-> push ebx					;save ebx (non volatile)
+
+		0xBB, 0x00, 0x00, 0x00, 0x00,	// + 0x17 (+ 0x18)		-> mov ebx, pArg			;move pArg (pCodecave) into ebx
+		0xC6, 0x43, 0x1C, 0x14,			// + 0x1C				-> mov [ebx + 0x1C], 0x17	;hotpatch jmp above to skip shellcode
+
+		0xFF, 0x33,						// + 0x20				-> push [ebx]				;push pArg (__stdcall)
+
+		0xFF, 0x53, 0x04,				// + 0x22				-> call [ebx + 0x04]		;call target function
+
+		0x89, 0x03,						// + 0x25				-> mov [ebx], eax			;store returned value
+
+		0x5B,							// + 0x27				-> pop ebx					;restore old ebx
+		0x58,							// + 0x28				-> pop eax					;restore eax (CallNextHookEx retval)
+
+		0x5D,							// + 0x29				-> pop ebp					;restore ebp
+		0xC2, 0x0C, 0x00				// + 0x2A				-> ret 0x000C				;return
+}; // SIZE = 0x3D (+ 0x08)
+
+	DWORD CodeOffset = 0x08;
+	DWORD CheckByteOffset = 0x14 + CodeOffset;
+
+	*reinterpret_cast<void**>(ShellCode + 0x00) = pArg;
+	*reinterpret_cast<void**> (ShellCode + 0x04) = pRoutine;
+
+	//! writing relative address of control instructions for pCallNextHookex relative to next eip
+	//! In x86 all memory and Data references are not PIC, So RIP relative addressing cannot be used with lea instruction
+	*reinterpret_cast<DWORD*>(ShellCode + 0x0F + CodeOffset) = reinterpret_cast<DWORD>(pCallNextHookEx) - ((reinterpret_cast<DWORD>(pCodeCave) + 0x0e + CodeOffset) + 5);
+
+	*reinterpret_cast<void**>(ShellCode + 0x18 + CodeOffset) = pCodeCave; 
+#endif
+	if (!WriteProcessMemory(hTargetProc, pCodeCave, ShellCode, sizeof(ShellCode), nullptr))
+	{
+		lastWin32Error = GetLastError();
+		VirtualFreeEx(hTargetProc, pCodeCave, 0, MEM_RELEASE);
+
+		return SR_SWHEX_ERR_WPM_FAIL;
+
+	}
+
+	static EnumWindowsCallBack_Data data; //! Made static so that lambda can capture it and pass it back to EnumwindowsCallBackProc
+
+	data.m_pHook = reinterpret_cast<HOOKPROC>(reinterpret_cast<BYTE*>(pCodeCave) + CodeOffset);
+	data.m_PID = GetProcessId(hTargetProc);
+	data.m_hModule = GetModuleHandle(TEXT("user32.dll"));
+
+	WNDENUMPROC EnumWindowsCallBack = [](HWND hWnd, LPARAM)-> BOOL
+	{
+		DWORD winPID = 0;
+		DWORD winTID = GetWindowThreadProcessId(hWnd, &winPID);
+		if (winPID == data.m_PID)
+		{
+			TCHAR szWindow[MAX_PATH]{ 0 };
+			if (IsWindowVisible(hWnd) && GetWindowText(hWnd, szWindow, MAX_PATH))
+			{
+				if (GetClassName(hWnd, szWindow, MAX_PATH) && _tcscmp(szWindow, TEXT("ConsoleWindowClass")))
+				{
+					HHOOK hHook = SetWindowsHookEx(WH_CALLWNDPROC, data.m_pHook, data.m_hModule, winTID);
+					if (hHook)
+					{
+						data.m_HookData.push_back({ hHook,hWnd });
+					}
+				}
+			}
+		}
+		return TRUE;
+	};
+
+	if (!EnumWindows(EnumWindowsCallBack, reinterpret_cast<LPARAM>(&data)))
+	{
+		lastWin32Error = GetLastError();
+		VirtualFreeEx(hTargetProc, pCodeCave, 0, MEM_RELEASE);
+		return SR_SWHEX_ERR_ENUM_WND_FAIL;
+	}
+
+	if (data.m_HookData.empty())
+	{
+		VirtualFreeEx(hTargetProc, pCodeCave, 0, MEM_RELEASE);
+		return SR_SWHEX_ERR_NO_WINDOWS;
+
+	}
+
+	HWND hForeGroundWnd = GetForegroundWindow();
+
+	for (auto i : data.m_HookData)
+	{
+		SetForegroundWindow(i.m_hWnd);
+		SendMessage(i.m_hWnd, WM_KEYDOWN, VK_SPACE, 0);
+		Sleep(10);
+		SendMessageA(i.m_hWnd, WM_IME_KEYUP, VK_SPACE, 0);
+		UnhookWindowsHookEx(i.m_hHook);
+
+	}
+	SetForegroundWindow(hForeGroundWnd);
+
+	DWORD Timer = GetTickCount();
+	BYTE CheckByte = 0;
+
+	do
+	{
+		ReadProcessMemory(hTargetProc, reinterpret_cast<BYTE*>(pCodeCave) + CheckByteOffset, &CheckByte, 1, nullptr);
+		if (GetTickCount() - Timer > SR_REMOTE_TIMEOUT)
+		{
+			return SR_SWHEX_ERR_TIMEOUT;
+		}
+		Sleep(10);
+	} while (!CheckByte);
+
+	ReadProcessMemory(hTargetProc, pCodeCave, &RemoteRet, sizeof(RemoteRet), nullptr);
+
+	VirtualFreeEx(hTargetProc, pCodeCave, 0, MEM_RELEASE);
+
+	return SR_ERR_SUCCESS;
 
 	return 0;
 }
