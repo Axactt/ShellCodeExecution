@@ -571,6 +571,13 @@ DWORD SR_SetWindowsHookEx(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, D
 	data.m_PID = GetProcessId(hTargetProc);
 	data.m_hModule = GetModuleHandle(TEXT("user32.dll"));
 
+	//!An application - defined callback function used with the EnumWindows or 
+	//! EnumDesktopWindows function.It receives top - level window handles.The 
+	//? WNDENUMPROC type defines a pointer to this callback function.
+	//! so as Lambda can be given a type of std::function,it can be defined as Callback
+	//! To continue enumeration, the callback function must return TRUE; 
+	//! to stop enumeration, it must return FALSE. BOOL CALLBACK EnumWindowsProc
+
 	WNDENUMPROC EnumWindowsCallBack = [](HWND hWnd, LPARAM)-> BOOL
 	{
 		DWORD winPID = 0;
@@ -593,6 +600,9 @@ DWORD SR_SetWindowsHookEx(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, D
 		return TRUE;
 	};
 
+	//!Enumerates all top-level windows on the screen by passing the handle to each 
+	//! window, in turn, to an application-defined callback function. EnumWindows continues 
+	//! until the last top-level window is enumerated or the callback function returns FALSE
 	if (!EnumWindows(EnumWindowsCallBack, reinterpret_cast<LPARAM>(&data)))
 	{
 		lastWin32Error = GetLastError();
@@ -607,10 +617,14 @@ DWORD SR_SetWindowsHookEx(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, D
 
 	}
 
+	//!Retrieves a handle to the foreground window (the window with which the user is currently working)
 	HWND hForeGroundWnd = GetForegroundWindow();
 
 	for (auto i : data.m_HookData)
 	{
+		//!Brings the thread that created the specified window into the foregroundand activates the window.Keyboard input is directed to the window, and various visual cues are changed for the user.
+		//! The system assigns a slightly //higher priority to the thread that created the foreground window than it does to other threads.
+		
 		SetForegroundWindow(i.m_hWnd);
 		SendMessage(i.m_hWnd, WM_KEYDOWN, VK_SPACE, 0);
 		Sleep(10);
@@ -618,6 +632,7 @@ DWORD SR_SetWindowsHookEx(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, D
 		UnhookWindowsHookEx(i.m_hHook);
 
 	}
+	//! Restore original foreground window as it was earlier
 	SetForegroundWindow(hForeGroundWnd);
 
 	DWORD Timer = GetTickCount();
@@ -625,7 +640,9 @@ DWORD SR_SetWindowsHookEx(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, D
 
 	do
 	{
+		//! checkByte to check if code ahs been executed in shellcodde
 		ReadProcessMemory(hTargetProc, reinterpret_cast<BYTE*>(pCodeCave) + CheckByteOffset, &CheckByte, 1, nullptr);
+		//! Check for a time-out during code execution
 		if (GetTickCount() - Timer > SR_REMOTE_TIMEOUT)
 		{
 			return SR_SWHEX_ERR_TIMEOUT;
@@ -644,5 +661,177 @@ DWORD SR_SetWindowsHookEx(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, D
 
 DWORD SR_QueueUserApc(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, DWORD& lastWin32Error, UINT_PTR& Out)
 {
-	return 0;
+	//!  sleepEx waitable object funtion to put thread in alertable wait mode
+	//! This is required to queue an user mode apc to the thread 
+	//! which calls the QueueUserApc function which is current thread here
+	//! We will inject shellcode to targetprocess and queue shellcode as APC 
+	//! to inject and execute shellcode in alertabel wait thread of the target process
+
+	//? pCodeCave allocates memory in target Process for copying up of ShellCode excutable bytes
+	void* pCodeCave = VirtualAllocEx(hTargetProc, nullptr, 0x100, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+	if (!pCodeCave)
+	{
+		lastWin32Error = GetLastError();
+		return SR_QUAPC_ERR_CANT_ALLOC_MEM;
+
+	}
+	//! GENERATE AND ASSIGN SHELLCODE AT ALOCATED pcodeCave memory in targetProcess
+#ifdef _WIN64
+	BYTE ShellCode[] =
+	{
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,		// - 0x18	-> returned value							;buffer to store returned value
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,		// - 0x10	-> pArg										;buffer to store argument
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,		// - 0x08	-> pRoutine									;pointer to the rouinte to call
+
+		0xEB, 0x00,											// + 0x00	-> jmp $+0x02								;jump to the next instruction
+
+		0x48, 0x8B, 0x41, 0x10,								// + 0x02	-> mov rax, [rcx + 0x10]					;move pRoutine into rax
+		0x48, 0x8B, 0x49, 0x08,								// + 0x06	-> mov rcx, [rcx + 0x08]					;move pArg into rcx
+
+		0x48, 0x83, 0xEC, 0x28,								// + 0x0A	-> sub rsp, 0x28							;reserve stack
+		0xFF, 0xD0,											// + 0x0E	-> call rax									;call pRoutine
+		0x48, 0x83, 0xC4, 0x28,								// + 0x10	-> add rsp, 0x28							;update stack
+
+		0x48, 0x85, 0xC0,									// + 0x14	-> test rax, rax							;check if rax indicates success/failure
+		0x74, 0x11,											// + 0x17	-> je pCodecave + 0x2A						;jmp to ret if routine failed
+
+		0x48, 0x8D, 0x0D, 0xC8, 0xFF, 0xFF, 0xFF,			// + 0x19	-> lea rcx, [pCodecave]						;load pointer to codecave into rcx
+		0x48, 0x89, 0x01,									// + 0x20	-> mov [rcx], rax							;store returned value
+
+		0xC6, 0x05, 0xD7, 0xFF, 0xFF, 0xFF, 0x28,			// + 0x23	-> mov byte ptr[pCodecave + 0x18], 0x28		;hot patch jump to skip shellcode
+
+		0xC3												// + 0x2A	-> ret										;return
+	}; // SIZE = 0x2B (+ 0x10)
+
+	DWORD CodeOffset = 0x18;
+	*reinterpret_cast<void**>(ShellCode + 0x08) = pArg;
+	*reinterpret_cast<void**>(ShellCode + 0x10) = pRoutine;
+
+#else
+	BYTE ShellCode[] =
+	{
+		0x00, 0x00, 0x00, 0x00, // - 0x0C	-> returned value					;buffer to store returned value
+		0x00, 0x00, 0x00, 0x00, // - 0x08	-> pArg								;buffer to store argument
+		0x00, 0x00, 0x00, 0x00, // - 0x04	-> pRoutine							;pointer to the routine to call
+
+		0x55,					// + 0x00	-> push ebp							;x86 stack frame creation
+		0x8B, 0xEC,				// + 0x01	-> mov ebp, esp
+
+		0xEB, 0x00,				// + 0x03	-> jmp pCodecave + 0x05 (+ 0x0C)	;jump to next instruction
+
+		0x53,					// + 0x05	-> push ebx							;save ebx
+		0x8B, 0x5D, 0x08,		// + 0x06	-> mov ebx, [ebp + 0x08]			;move pCodecave into ebx (non volatile)
+
+		0xFF, 0x73, 0x04,		// + 0x09	-> push [ebx + 0x04]				;push pArg on stack
+		0xFF, 0x53, 0x08,		// + 0x0C	-> call dword ptr[ebx + 0x08]		;call pRoutine
+
+		0x85, 0xC0,				// + 0x0F	-> test eax, eax					;check if eax indicates success/failure
+		0x74, 0x06,				// + 0x11	-> je pCodecave + 0x19 (+ 0x0C)		;jmp to cleanup if routine failed
+
+		0x89, 0x03,				// + 0x13	-> mov [ebx], eax					;store returned value
+		0xC6, 0x43, 0x10, 0x15, // + 0x15	-> mov byte ptr [ebx + 0x10], 0x15	;hot patch jump to skip shellcode
+
+		0x5B,					// + 0x19	-> pop ebx							;restore old ebx
+
+		0x5D,					// + 0x1A	-> pop ebp							;restore ebp
+		0xC2, 0x04, 0x00		// + 0x1B	-> ret 0x0004						;return
+	}; // SIZE = 0x1E (+ 0x0C)
+
+	DWORD CodeOffset = 0x0c;
+	*reinterpret_cast<void**>(ShellCode + 0x04) = pArg;
+	*reinterpret_cast<void**>(ShellCode + 0x08) = pRoutine;
+
+#endif
+
+	BOOL bRet = WriteProcessMemory(hTargetProc, pCodeCave, ShellCode, sizeof(ShellCode), nullptr);
+	if (!bRet)
+	{
+		lastWin32Error = GetLastError();
+		VirtualFreeEx(hTargetProc, pCodeCave, 0, MEM_RELEASE);
+		return SR_QUAPC_ERR_WPM_FAIL;
+
+	}
+	//! Create a snapshot of all threads in the target proc
+	HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, GetProcessId(hTargetProc));
+	if (hSnap == INVALID_HANDLE_VALUE) //! error checka as createtool32snapshot returns Invalid_handle_valus
+	{
+		lastWin32Error = GetLastError();
+		VirtualFreeEx(hTargetProc, pCodeCave, 0, MEM_RELEASE);
+		return SR_QUAPC_ERR_TH32_FAIL;
+
+	}
+
+	DWORD TargetPID = GetProcessId(hTargetProc); // Copy of the target process id
+	bool APCqueued = false;
+	//! Creating a callback apc function to be called by QueueUserApc function
+	PAPCFUNC pShellCode = reinterpret_cast<PAPCFUNC>(reinterpret_cast<BYTE*>(pCodeCave) + CodeOffset);
+	THREADENTRY32 TE32{ 0 };
+	TE32.dwSize = sizeof(TE32);
+
+	bRet = Thread32First(hSnap, &TE32);
+	if (!bRet)
+	{
+		lastWin32Error = GetLastError();
+		CloseHandle(hSnap);
+		VirtualFreeEx(hTargetProc, pCodeCave, 0, MEM_RELEASE);
+		return SR_QUAPC_ERR_T32FIRST_FAIL;
+
+	}
+
+	//??Opens Thread handle n Queues an Apc whcih is ShellCode to all the threads in TargetProcess id
+	do
+	{
+		if (TE32.th32OwnerProcessID == TargetPID) //todo why  Check for ownerprocessId again as we already took snapshot in context of target process id
+		{
+			HANDLE  hThread = OpenThread(THREAD_SET_CONTEXT, FALSE, TE32.th32ThreadID);
+			if (hThread)
+			{
+				if (QueueUserAPC(pShellCode, hThread, reinterpret_cast<ULONG_PTR>(pCodeCave)))
+				{
+					// If suuccessful then apc queued state is set to true
+					APCqueued = true;
+
+				}
+				else
+				{
+					lastWin32Error = GetLastError();
+				}
+
+				CloseHandle(hThread);
+
+			}
+
+		}
+
+		bRet = Thread32Next(hSnap, &TE32);
+
+
+	} while (bRet);
+
+	CloseHandle(hSnap);
+
+	if (!APCqueued)
+	{
+		VirtualFreeEx(hTargetProc, pCodeCave, 0, MEM_RELEASE); //! pCodeCave is allocated memory addrs for shellcode in Target process
+		return SR_QUAPC_ERR_NO_APC_THREAD;
+
+	}
+	else
+	{
+		lastWin32Error = 0;
+	}
+	DWORD Timer = GetTickCount();
+	Out = 0; //! output buffer to readProcesMemory passed as an l-value non-cont refernce UINT_PTR& out argument to function
+
+	do
+	{
+		ReadProcessMemory(hTargetProc, pCodeCave, &Out, sizeof(Out), nullptr);
+		if (GetTickCount() - Timer > SR_REMOTE_TIMEOUT)
+		{
+			return SR_SWHEX_ERR_TIMEOUT;
+		}
+		Sleep(10);
+	} while (!Out);
+
+	return SR_ERR_SUCCESS;
 }

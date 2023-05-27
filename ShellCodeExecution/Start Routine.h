@@ -22,7 +22,8 @@ DWORD StartRoutine(HANDLE hTargetProc, f_Routine* pRoutine, void* pArg, LAUNCH_M
 //! creating function prototype for NtCreateThreadEx
 //todo to understand all of the parameter of NtCreateThreadEx funtion
 //! hTargetProc is handle to the TargetProcess where Dll is to be Injected
-//! pRoutine is the address of LOadLibrary Routine Found using GetprocessAddresEx function
+//! pRoutine is the address of LOadLibrary Routine Found using GetprocessAddresEx function. 
+//todo to make a new projcet where it could be any routine you want to execute insie the target process
 //! pRoutine cast To LPTHREAD_START_ROUTINE parameter 
 //! which is basically::userFunction lpStartAddres(or base-address) to call from  new created Thread
 //! [in] lpStartAddress ==> "A pointer to the application - defined function of type LPTHREAD_START_ROUTINE to be executed by the thread and represents the starting address of the thread in the remote process.The function must exist in the remote process."(LPTHREAD_START_ROUTINE).In our case it is address of load-libraryfunction buffer 

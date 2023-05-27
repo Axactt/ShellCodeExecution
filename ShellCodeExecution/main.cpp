@@ -128,7 +128,7 @@ bool Injectdll(const TCHAR* szProcess, const TCHAR* szPath, LAUNCH_METHOD Method
 
 int main()
 {
-	bool bRet = Injectdll(PROCESS_NAME, DLL_PATH, LM_SetWindowsHookEx);
+	bool bRet = Injectdll(PROCESS_NAME, DLL_PATH, LM_QueueUserAPC);
 	//!To log various error function is returning bool true value on success and std::cin.get() is used to stop till keyboard input.
 	if (!bRet)
 	{
